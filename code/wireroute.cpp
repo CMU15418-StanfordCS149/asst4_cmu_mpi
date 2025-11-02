@@ -12,6 +12,7 @@
 #include "wireroute.h"
 #define ROOT 0
 
+// 打印占用统计信息
 void print_stats(const std::vector<std::vector<int>>& occupancy) {
   int max_occupancy = 0;
   long long total_cost = 0;
@@ -27,6 +28,7 @@ void print_stats(const std::vector<std::vector<int>>& occupancy) {
   std::cout << "Total cost: " << total_cost << '\n';
 }
 
+// 写入输出文件
 void write_output(const std::vector<Wire>& wires, const int num_wires, const std::vector<std::vector<int>>& occupancy, const int dim_x, const int dim_y, const int nproc, std::string input_filename) {
   if (std::size(input_filename) >= 4 && input_filename.substr(std::size(input_filename) - 4) == ".txt") {
     input_filename.resize(std::size(input_filename) - 4);
@@ -63,18 +65,18 @@ void write_output(const std::vector<Wire>& wires, const int num_wires, const std
     out_wires << start_x << ' ' << start_y << ' ' << bend1_x << ' ' << bend1_y << ' ';
 
     if (start_y == bend1_y) {
-    // first bend was horizontal
+    // 第一个弯道是水平的
 
       if (end_x != bend1_x) {
-        // two bends
+        // 有两个弯道
 
         out_wires << bend1_x << ' ' << end_y << ' ';
       }
     } else if (start_x == bend1_x) {
-      // first bend was vertical
+      // 第一个弯道是垂直的
 
       if (end_y != bend1_y) {
-        // two bends
+        // 有两个弯道
 
         out_wires << end_x << ' ' << bend1_y << ' ';
       }
@@ -90,11 +92,11 @@ int main(int argc, char *argv[]) {
   int pid;
   int nproc;
 
-  // Initialize MPI
+  // 初始化 MPI
   MPI_Init(&argc, &argv);
-  // Get process rank
+  // 获取进程排名
   MPI_Comm_rank(MPI_COMM_WORLD, &pid);
-  // Get total number of processes
+  // 获取进程总数
   MPI_Comm_size(MPI_COMM_WORLD, &nproc);
 
   std::string input_filename;
@@ -103,7 +105,7 @@ int main(int argc, char *argv[]) {
   char parallel_mode = '\0';
   int batch_size = 1;
 
-  // Read command line arguments
+  // 读取命令行参数
   int opt;
   while ((opt = getopt(argc, argv, "f:p:i:m:b:")) != -1) {
     switch (opt) {
@@ -132,7 +134,7 @@ int main(int argc, char *argv[]) {
     }
   }
 
-  // Check if required options are provided
+  // 检查是否提供了必要的选项
   if (empty(input_filename) || SA_iters <= 0 || (parallel_mode != 'A' && parallel_mode != 'W') || batch_size <= 0) {
     if (pid == ROOT) {
       std::cerr << "Usage: " << argv[0] << " -f input_filename [-p SA_prob] [-i SA_iters] -m parallel_mode -b batch_size\n";
@@ -162,7 +164,7 @@ int main(int argc, char *argv[]) {
         exit(EXIT_FAILURE);
       }
 
-      /* Read the grid dimension and wire information from file */
+      /* 从文件中读取网格维度和电线信息 */
       fin >> dim_x >> dim_y >> num_wires;
 
       wires.resize(num_wires);
@@ -173,7 +175,7 @@ int main(int argc, char *argv[]) {
       }
   }
 
-  /* Initialize any additional data structures needed in the algorithm */
+  /* 初始化算法中所需的任何附加数据结构 */
 
   if (pid == ROOT) {
     const double init_time = std::chrono::duration_cast<std::chrono::duration<double>>(std::chrono::steady_clock::now() - init_start).count();
@@ -184,20 +186,20 @@ int main(int argc, char *argv[]) {
 
   /** 
    * (TODO)
-   * Implement the wire routing algorithm here
-   * Feel free to structure the algorithm into different functions
-   * Use MPI to parallelize the algorithm. 
+   * 在这里实现电线布线算法
+   * 可以将算法结构化为不同的函数
+   * 使用 MPI 来并行化算法。 
    */
 
   if (pid == ROOT) {
     const double compute_time = std::chrono::duration_cast<std::chrono::duration<double>>(std::chrono::steady_clock::now() - compute_start).count();
     std::cout << "Computation time (sec): " << std::fixed << std::setprecision(10) << compute_time << '\n';
 
-    /* Write wires and occupancy matrix to files */
+    /* 将电线和占用矩阵写入文件 */
     print_stats(occupancy);
     write_output(wires, num_wires, occupancy, dim_x, dim_y, nproc, input_filename);
   }
 
-  // Cleanup
+  // 清理
   MPI_Finalize();
 }
