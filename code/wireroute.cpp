@@ -10,6 +10,11 @@
 #include <mpi.h>
 
 #include "wireroute.h"
+
+#include <random>
+#include <climits>
+#include <cassert>
+
 #define ROOT 0
 
 // 打印占用统计信息
@@ -85,6 +90,121 @@ void write_output(const std::vector<Wire>& wires, const int num_wires, const std
   }
 
   out_wires.close();
+}
+
+void serial_cal_occupancy(std::vector<std::vector<int>>& occupancy, const std::vector<Wire>& wires) {
+  for(const Wire &wire : wires) {
+    // Wire: int start_x, start_y, end_x, end_y, bend1_x, bend1_y;
+    assert(wire.start_y == wire.bend1_y || wire.start_x == wire.bend1_x);
+    if (wire.start_y == wire.bend1_y) {
+    // 第一个弯道是水平的
+      // 起始点到第一个弯折点 (横的)
+      for(int x = wire.start_x; x != wire.bend1_x; x += (wire.start_x < wire.bend1_x ? 1 : -1)) {
+        occupancy[wire.start_y][x]++;
+      }
+      if (wire.end_x != wire.bend1_x) {
+        // 有两个弯道
+        // 第一个弯折点到第二个弯折点 (竖的)
+        for(int y = wire.bend1_y; y != wire.end_y; y += (wire.bend1_y < wire.end_y ? 1 : -1)) {
+          occupancy[y][wire.bend1_x]++;
+        }
+        // 第二个弯折点到终点 (横的)
+        for(int x = wire.bend1_x; x != wire.end_x; x += (wire.bend1_x < wire.end_x ? 1 : -1)) {
+          occupancy[wire.end_y][x]++;
+        }
+      }
+      else {
+        // 垂直线段
+        for(int y = wire.start_y; y != wire.end_y; y += (wire.start_y < wire.end_y ? 1 : -1)) {
+          occupancy[y][wire.end_x]++;
+        }
+      }
+    } else if (wire.start_x == wire.bend1_x) {
+      // 第一个弯道是垂直的
+      // 起始点到第一个弯折点 (竖的)
+      for(int y = wire.start_y; y != wire.bend1_y; y += (wire.start_y < wire.bend1_y ? 1 : -1)) {
+        occupancy[y][wire.start_x]++;
+      }
+      if (wire.end_y != wire.bend1_y) {
+        // 有两个弯道
+        // 第一个弯折点到第二个弯折点 (横的)
+        for(int x = wire.bend1_x; x != wire.end_x; x += (wire.bend1_x < wire.end_x ? 1 : -1)) {
+          occupancy[wire.bend1_y][x]++;
+        }
+        // 第二个弯折点到终点 (竖的)
+        for(int y = wire.bend1_y; y != wire.end_y; y += (wire.bend1_y < wire.end_y ? 1 : -1)) {
+          occupancy[y][wire.end_x]++;
+        }
+      }
+      // 理论上来说，水平线已经在前面的分支处理掉了
+      assert(wire.end_y != wire.bend1_y);
+    }
+    // 终点 occupancy +1
+    occupancy[wire.end_y][wire.end_x]++;
+  }
+}
+
+// 计算单条线的路径成本
+// isAlready: 参数表示该路径是否已经被占用（即该路径是否已经被计算过并更新了占用矩阵）
+long long compute_path_cost(const Wire& wire, const std::vector<std::vector<int>>& occupancy, bool isAlready) {
+  long long cost = 0;
+
+  assert(wire.start_y == wire.bend1_y || wire.start_x == wire.bend1_x);
+  if (wire.start_y == wire.bend1_y) {
+    // 第一个弯道是水平的
+    // 起始点到第一个弯折点 (横的)
+    for(int x = wire.start_x; x != wire.bend1_x; x += (wire.start_x < wire.bend1_x ? 1 : -1)) {
+      int occ = occupancy[wire.start_y][x];
+      cost += isAlready ? occ * occ : (occ + 1) * (occ + 1);
+    }
+    if (wire.end_x != wire.bend1_x) {
+      // 有两个弯道
+      // 第一个弯折点到第二个弯折点 (竖的)
+      for(int y = wire.bend1_y; y != wire.end_y; y += (wire.bend1_y < wire.end_y ? 1 : -1)) {
+        int occ = occupancy[y][wire.bend1_x];
+        cost += isAlready ? occ * occ : (occ + 1) * (occ + 1);
+      }
+      // 第二个弯折点到终点 (横的)
+      for(int x = wire.bend1_x; x != wire.end_x; x += (wire.bend1_x < wire.end_x ? 1 : -1)) {
+        int occ = occupancy[wire.end_y][x];
+        cost += isAlready ? occ * occ : (occ + 1) * (occ + 1);
+      }
+    }
+    else {
+      // 垂直线段
+      for(int y = wire.start_y; y != wire.end_y; y += (wire.start_y < wire.end_y ? 1 : -1)) {
+        int occ = occupancy[y][wire.end_x];
+        cost += isAlready ? occ * occ : (occ + 1) * (occ + 1);
+      }
+    }
+  } else if (wire.start_x == wire.bend1_x) {
+    // 第一个弯道是垂直的
+    // 起始点到第一个弯折点 (竖的)
+    for(int y = wire.start_y; y != wire.bend1_y; y += (wire.start_y < wire.bend1_y ? 1 : -1)) {
+      int occ = occupancy[y][wire.start_x];
+      cost += isAlready ? occ * occ : (occ + 1) * (occ + 1);
+    }
+    if (wire.end_y != wire.bend1_y) {
+      // 有两个弯道
+      // 第一个弯折点到第二个弯折点 (横的)
+      for(int x = wire.bend1_x; x != wire.end_x; x += (wire.bend1_x < wire.end_x ? 1 : -1)) {
+        int occ = occupancy[wire.bend1_y][x];
+        cost += isAlready ? occ * occ : (occ + 1) * (occ + 1);
+      }
+      // 第二个弯折点到终点 (竖的)
+      for(int y = wire.bend1_y; y != wire.end_y; y += (wire.bend1_y < wire.end_y ? 1 : -1)) {
+        int occ = occupancy[y][wire.end_x];
+        cost += isAlready ? occ * occ : (occ + 1) * (occ + 1);
+      }
+    }
+    // 理论上来说，水平线已经在前面的分支处理掉了
+    assert(wire.end_y != wire.bend1_y);
+  }
+  // 终点的成本
+  int occ = occupancy[wire.end_y][wire.end_x];
+  cost += isAlready ? occ * occ : (occ + 1) * (occ + 1);
+  
+  return cost;
 }
 
 int main(int argc, char *argv[]) {
@@ -166,7 +286,7 @@ int main(int argc, char *argv[]) {
 
       /* 从文件中读取网格维度和电线信息 */
       fin >> dim_x >> dim_y >> num_wires;
-
+      // 对电线矢量做初始化，第一个弯折的地方就是起始点
       wires.resize(num_wires);
       for (auto& wire : wires) {
         fin >> wire.start_x >> wire.start_y >> wire.end_x >> wire.end_y;
@@ -190,6 +310,14 @@ int main(int argc, char *argv[]) {
    * 可以将算法结构化为不同的函数
    * 使用 MPI 来并行化算法。 
    */
+  // 预先为 occupancy 分配空间
+  if(pid == ROOT) {
+    occupancy.resize(dim_y, std::vector<int>(dim_x, 0));
+  }
+  // 先计算一次 occupancy
+  if(pid == ROOT) {
+    serial_cal_occupancy(occupancy, wires);
+  }
 
   if (pid == ROOT) {
     const double compute_time = std::chrono::duration_cast<std::chrono::duration<double>>(std::chrono::steady_clock::now() - compute_start).count();
