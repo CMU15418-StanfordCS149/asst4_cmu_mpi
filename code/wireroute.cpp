@@ -93,6 +93,11 @@ void write_output(const std::vector<Wire>& wires, const int num_wires, const std
 }
 
 void serial_cal_occupancy(std::vector<std::vector<int>>& occupancy, const std::vector<Wire>& wires) {
+  // 先对 occupancy 矩阵置0
+  for(auto &row : occupancy) {
+    std::fill(row.begin(), row.end(), 0);
+  }
+  // 根据 wires 信息更新 occupancy 矩阵
   for(const Wire &wire : wires) {
     // Wire: int start_x, start_y, end_x, end_y, bend1_x, bend1_y;
     assert(wire.start_y == wire.bend1_y || wire.start_x == wire.bend1_x);
@@ -150,6 +155,7 @@ long long compute_path_cost(const Wire& wire, const std::vector<std::vector<int>
   long long cost = 0;
 
   assert(wire.start_y == wire.bend1_y || wire.start_x == wire.bend1_x);
+  
   if (wire.start_y == wire.bend1_y) {
     // 第一个弯道是水平的
     // 起始点到第一个弯折点 (横的)
@@ -314,7 +320,60 @@ int main(int argc, char *argv[]) {
   if(pid == ROOT) {
     occupancy.resize(dim_y, std::vector<int>(dim_x, 0));
   }
-  // 先计算一次 occupancy
+  // 开始迭代
+  if(pid == ROOT) {
+    for(int iter = 0; iter < SA_iters; iter++) {
+      // 先计算一遍 occupancy 矩阵
+      serial_cal_occupancy(occupancy, wires);
+      for(Wire &wire : wires) {
+      // 遍历所有已有的线 (已选择的线)
+      // int start_x, start_y, end_x, end_y, bend1_x, bend1_y;
+        // 1.计算当前路径的成本（若尚未知晓）。此路径即为当前的最短路径。
+        Wire lowest_cost_wire = wire; 
+        long long lowest_cost = compute_path_cost(lowest_cost_wire, occupancy, true);
+        // 获取初始路径，防止在多次迭代后造成第一个弯折点 x, y 都不等于起始点 x,y
+        Wire initial_wire = wire;
+        initial_wire.bend1_x = wire.start_x;
+        initial_wire.bend1_y = wire.start_y;
+        // 2.考量所有先水平方向布线的路径。若其中任意路径的成本低于当前最短路径，则将其设为新的最短路径。
+        for(int x = wire.start_x; x != wire.end_x; x += (wire.start_x < wire.end_x ? 1 : -1)) {
+          if(x == wire.bend1_x) continue; // 跳过当前路径
+          Wire horizontal_wire = initial_wire;
+          horizontal_wire.bend1_x = x;
+          long long horizontal_cost = compute_path_cost(horizontal_wire, occupancy, false);
+          if (horizontal_cost < lowest_cost) {
+            // lowest_cost_wire.bend1_x = horizontal_wire.bend1_x;
+            // 这里必须要全部一起赋值，因为 bend1_y 可能在之前的迭代改变
+            lowest_cost_wire = horizontal_wire;
+            lowest_cost = horizontal_cost;
+          }
+        }
+        // 3.考量所有先垂直方向布线的路径。若其中任意路径的成本低于当前最短路径，则将其设为新的最短路径。
+        for(int y = wire.start_y; y != wire.end_y; y += (wire.start_y < wire.end_y ? 1 : -1)) {
+          if(y == wire.bend1_y) continue; // 跳过当前路径
+          Wire vertical_wire = initial_wire;
+          vertical_wire.bend1_y = y;
+          long long vertical_cost = compute_path_cost(vertical_wire, occupancy, false);
+          if (vertical_cost < lowest_cost) {
+            // lowest_cost_wire.bend1_y = vertical_wire.bend1_y;
+            // 这里必须要全部一起赋值，因为 bend1_x 可能在 step2 改变
+            lowest_cost_wire = vertical_wire;
+            lowest_cost = vertical_cost;
+          }
+        }
+        // if(wire.start_x == 1613 && wire.start_y == 2408) {
+        //   std::cout << "Iter " << iter << ": Wire from (" << wire.start_x << "," << wire.start_y 
+        //   << ") to (" << wire.bend1_x << "," << wire.bend1_y << ") to (" 
+        //   << wire.end_x << "," << wire.end_y << ") updated to bend at (" 
+        //   << lowest_cost_wire.bend1_x << "," << lowest_cost_wire.bend1_y << ") with cost " << lowest_cost << '\n';
+        // }
+        // 4. 用最短路径线更新线矢量
+        wire = lowest_cost_wire;
+      }
+    }
+  }
+
+  // 结束后还要计算一遍 occupancy 矩阵
   if(pid == ROOT) {
     serial_cal_occupancy(occupancy, wires);
   }
