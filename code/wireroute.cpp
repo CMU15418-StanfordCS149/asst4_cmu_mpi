@@ -119,7 +119,7 @@ void serial_cal_occupancy(std::vector<std::vector<int>>& occupancy, const std::v
         }
       }
       else {
-        // 垂直线段
+        // 垂直线段 或者 方形右上角这种弯道
         for(int y = wire.start_y; y != wire.end_y; y += (wire.start_y < wire.end_y ? 1 : -1)) {
           occupancy[y][wire.end_x]++;
         }
@@ -141,8 +141,13 @@ void serial_cal_occupancy(std::vector<std::vector<int>>& occupancy, const std::v
           occupancy[y][wire.end_x]++;
         }
       }
-      // 理论上来说，水平线已经在前面的分支处理掉了
-      assert(wire.end_y != wire.bend1_y);
+      else {
+        // 理论上来说，水平线已经在前面的分支处理掉了
+        // 但是仍有可能存在 方形左下角这种弯道 (即L形)
+        for(int x = wire.start_x; x != wire.end_x; x += (wire.start_x < wire.end_x ? 1 : -1)) {
+          occupancy[wire.end_y][x]++;
+        }
+      }
     }
     // 终点 occupancy +1
     occupancy[wire.end_y][wire.end_x]++;
@@ -177,7 +182,7 @@ long long compute_path_cost(const Wire& wire, const std::vector<std::vector<int>
       }
     }
     else {
-      // 垂直线段
+      // 垂直线段 或者 方形右上角这种弯道
       for(int y = wire.start_y; y != wire.end_y; y += (wire.start_y < wire.end_y ? 1 : -1)) {
         int occ = occupancy[y][wire.end_x];
         cost += isAlready ? occ * occ : (occ + 1) * (occ + 1);
@@ -203,8 +208,14 @@ long long compute_path_cost(const Wire& wire, const std::vector<std::vector<int>
         cost += isAlready ? occ * occ : (occ + 1) * (occ + 1);
       }
     }
-    // 理论上来说，水平线已经在前面的分支处理掉了
-    assert(wire.end_y != wire.bend1_y);
+    else {
+      // 理论上来说，水平线已经在前面的分支处理掉了
+      // 但是仍有可能存在 方形左下角这种弯道 (即L形)
+      for(int x = wire.start_x; x != wire.end_x; x += (wire.start_x < wire.end_x ? 1 : -1)) {
+        int occ = occupancy[wire.end_y][x];
+        cost += isAlready ? occ * occ : (occ + 1) * (occ + 1);
+      }
+    }
   }
   // 终点的成本
   int occ = occupancy[wire.end_y][wire.end_x];
@@ -217,6 +228,11 @@ int main(int argc, char *argv[]) {
   const auto init_start = std::chrono::steady_clock::now();
   int pid;
   int nproc;
+
+  // 创建随机数引擎和分布器
+  std::random_device rd;
+  std::mt19937 gen(rd());
+  std::uniform_real_distribution<double> dis_0_1(0.0, 1.0);
 
   // 初始化 MPI
   MPI_Init(&argc, &argv);
@@ -321,13 +337,51 @@ int main(int argc, char *argv[]) {
     occupancy.resize(dim_y, std::vector<int>(dim_x, 0));
   }
   // 开始迭代
+  // 记录最好的 wires vector
+  std::vector<Wire> best_wires;
+  long long best_total_cost = LLONG_MAX;
   if(pid == ROOT) {
     for(int iter = 0; iter < SA_iters; iter++) {
       // 先计算一遍 occupancy 矩阵
       serial_cal_occupancy(occupancy, wires);
+      // 统计当前总成本
+      long long total_cost = 0;
+      for (const auto& row : occupancy) {
+        for (const int count : row) {
+          total_cost += count * count;
+        }
+      }
+      if(total_cost < best_total_cost) {
+        best_total_cost = total_cost;
+        best_wires = wires; // 记录当前最优解
+      }
+
       for(Wire &wire : wires) {
       // 遍历所有已有的线 (已选择的线)
       // int start_x, start_y, end_x, end_y, bend1_x, bend1_y;
+
+        // 生成随机数 (0~1 浮点数) (简易模拟退火)
+        double random_num = dis_0_1(gen);
+        if(random_num < SA_prob) {
+          // 随机选取 deltax + deltay 的一条线 
+          int deltax = std::abs(wire.end_x - wire.start_x);
+          int deltay = std::abs(wire.end_y - wire.start_y);
+          std::uniform_int_distribution<int> dis_0_deltax_plus_deltay(0, deltax + deltay); // 左右都是闭区间
+          int random_choice = dis_0_deltax_plus_deltay(gen);
+
+          if(random_choice <= deltax) {
+            // 选择水平线 (或原点)
+            wire.bend1_x = (wire.start_x < wire.end_x) ? wire.start_x + random_choice : wire.start_x - random_choice;
+            wire.bend1_y = wire.start_y;
+          } else {
+            // 选择垂直线
+            wire.bend1_x = wire.start_x;
+            wire.bend1_y = (wire.start_y < wire.end_y) ? wire.start_y + (random_choice - deltax) : wire.start_y - (random_choice - deltax);
+          }
+          continue; // 进入下一次迭代(下一条线)
+        }
+
+        // 从 deltax + deltay 的线中选取成本最低的路径
         // 1.计算当前路径的成本（若尚未知晓）。此路径即为当前的最短路径。
         Wire lowest_cost_wire = wire; 
         long long lowest_cost = compute_path_cost(lowest_cost_wire, occupancy, true);
@@ -336,8 +390,8 @@ int main(int argc, char *argv[]) {
         initial_wire.bend1_x = wire.start_x;
         initial_wire.bend1_y = wire.start_y;
         // 2.考量所有先水平方向布线的路径。若其中任意路径的成本低于当前最短路径，则将其设为新的最短路径。
-        for(int x = wire.start_x; x != wire.end_x; x += (wire.start_x < wire.end_x ? 1 : -1)) {
-          if(x == wire.bend1_x) continue; // 跳过当前路径
+        for(int x = wire.start_x; x != wire.end_x + (wire.start_x < wire.end_x ? 1 : -1) ; x += (wire.start_x < wire.end_x ? 1 : -1)) {
+          // if(x == wire.bend1_x) continue; // 跳过当前路径 (不跳过，因为 wire.bend1_y 不一定 == start_y)
           Wire horizontal_wire = initial_wire;
           horizontal_wire.bend1_x = x;
           long long horizontal_cost = compute_path_cost(horizontal_wire, occupancy, false);
@@ -349,8 +403,8 @@ int main(int argc, char *argv[]) {
           }
         }
         // 3.考量所有先垂直方向布线的路径。若其中任意路径的成本低于当前最短路径，则将其设为新的最短路径。
-        for(int y = wire.start_y; y != wire.end_y; y += (wire.start_y < wire.end_y ? 1 : -1)) {
-          if(y == wire.bend1_y) continue; // 跳过当前路径
+        for(int y = wire.start_y; y != wire.end_y + (wire.start_y < wire.end_y ? 1 : -1); y += (wire.start_y < wire.end_y ? 1 : -1)) {
+          // if(y == wire.bend1_y) continue; // 跳过当前路径 (不跳过，因为 wire.bend1_x 不一定 == start_x)
           Wire vertical_wire = initial_wire;
           vertical_wire.bend1_y = y;
           long long vertical_cost = compute_path_cost(vertical_wire, occupancy, false);
@@ -375,6 +429,22 @@ int main(int argc, char *argv[]) {
 
   // 结束后还要计算一遍 occupancy 矩阵
   if(pid == ROOT) {
+    serial_cal_occupancy(occupancy, wires);
+    // 统计当前总成本
+    long long total_cost = 0;
+    for (const auto& row : occupancy) {
+      for (const int count : row) {
+        total_cost += count * count;
+      }
+    }
+    if(total_cost < best_total_cost) {
+      best_total_cost = total_cost;
+      best_wires = wires; // 记录当前最优解
+    }
+  }
+  // 最后将 wires 更新为 best_wireo, 并且把 occupancy 矩阵更新为 best_wires 对应的矩阵
+  if(pid == ROOT) {
+    wires = best_wires;
     serial_cal_occupancy(occupancy, wires);
   }
 
